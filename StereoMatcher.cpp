@@ -30,7 +30,7 @@
 
 
 
-void write_grayscale_bmp_image(uint8_t * image_buffer, char* file_name, int image_width, int image_height) {
+void write_grayscale_bmp_image(uint8_t* image_buffer, char* file_name, int image_width, int image_height) {
 	stbi_write_bmp(file_name, image_width, image_height, 1, image_buffer);
 }
 
@@ -40,6 +40,7 @@ void compute_disp_map_ref_and_omp(unsigned char* left_image, unsigned char* righ
 	image_dims const& dims, int window_half_size, int const max_disp) {
 
 	//TODO: Parallelize Stereo Matching with OpenMP
+#pragma omp parallel for collapse(2)
 	for (int y = window_half_size; y < dims.height - window_half_size; ++y) {
 		for (int x = window_half_size; x < dims.width - window_half_size; ++x) {
 			float best_NCC_cost = -1.0; //initallize the matching cost 
@@ -55,6 +56,7 @@ void compute_disp_map_ref_and_omp(unsigned char* left_image, unsigned char* righ
 
 			int e_limit_left_hand_side = window_half_size; //external limit
 			int e_limit_right_hand_side = window_half_size;			//whyy warum nicht x + max_disp ?
+
 			if (x > max_disp) {
 				e_limit_left_hand_side = std::max(window_half_size, (x - max_disp));  //left border clamped
 				e_limit_right_hand_side = std::min((dims.width - 1) - window_half_size, x + max_disp); //right border clamped
@@ -207,9 +209,9 @@ int main(int argc, char* argv[])
 		mpirun -n 1 ./StereoMatcher ./images/rect1.png ./images/rect2.png 0 0        //"no openmp/single threaded openmp", no GPGPU via openCL, 1 MPI worker (default implementation, should work for you without writing anything)
 		mpirun -n 1 ./StereoMatcher ./images/rect1.png ./images/rect2.png 1 0        // all available openMP threads for computation, no GPGPU via openCL    (should have openmp added in fitting parts)
 		./StereoMatcher ./images/rect1.png ./images/rect2.png 1 1        // all available openMP threads for computation, + stereo matching on the GPU       (should have opencl kernels implemented properly)
-		
+
 		NOTE: If you are working under WINDOWS and therore using MS-MPI, prelace 'mpirun'  with 'mpiexec' in the command line example above!!!
-	
+
 	*/
 	if (argc < 5) {
 		printf("USAGE: %s left_img_filename[path] right_img_filename[path] USE_OPENMP[0|1] USE_OPENCL[0|1]\n", argv[0]);
@@ -339,7 +341,7 @@ int main(int argc, char* argv[])
 			// precompute the values for the calls for scatterv and gatherv for all nodes 
 			// master node
 			if (0 == node_idx) {
-				core_rows_send_counts[node_idx] = (num_non_overlapping_rows_per_worker /*+ window_halfsize*/)* complete_image_width;
+				core_rows_send_counts[node_idx] = (num_non_overlapping_rows_per_worker /*+ window_halfsize*/)*complete_image_width;
 				core_row_send_offset_original_image_buffer[node_idx] = 0;
 
 				top_padding_rows_send_counts[node_idx] = 0; // top part should have no top padding, so send size is 0 byte ...
@@ -351,8 +353,8 @@ int main(int argc, char* argv[])
 			}
 			else if (node_idx == num_mpi_nodes - 1) { //last node with unique row count + one sided overlap
 
-				core_rows_send_counts[node_idx] = (num_non_overlapping_rows_last_worker /*+ window_halfsize*/)* complete_image_width;
-				core_row_send_offset_original_image_buffer[node_idx] = (num_non_overlapping_rows_per_worker)* complete_image_width * (node_idx); //- window_halfsize * complete_image_width;
+				core_rows_send_counts[node_idx] = (num_non_overlapping_rows_last_worker /*+ window_halfsize*/)*complete_image_width;
+				core_row_send_offset_original_image_buffer[node_idx] = (num_non_overlapping_rows_per_worker)*complete_image_width * (node_idx); //- window_halfsize * complete_image_width;
 
 				top_padding_rows_send_counts[node_idx] = window_halfsize * complete_image_width; // top part should have no top padding, so send size is 0
 				top_padding_row_send_offset_original_image_buffer[node_idx] = core_row_send_offset_original_image_buffer[node_idx] - window_halfsize * complete_image_width;  //top part sould have no top padding, so we just choose the read offset of 0
@@ -363,8 +365,8 @@ int main(int argc, char* argv[])
 			}
 			else { //every worker that is not the first or the last one has two sided overlap
 
-				core_rows_send_counts[node_idx] = (num_non_overlapping_rows_last_worker /*+ 2 * window_halfsize*/)* complete_image_width;
-				core_row_send_offset_original_image_buffer[node_idx] = (num_non_overlapping_rows_per_worker)* complete_image_width * (node_idx); //- window_halfsize * complete_image_width;
+				core_rows_send_counts[node_idx] = (num_non_overlapping_rows_last_worker /*+ 2 * window_halfsize*/)*complete_image_width;
+				core_row_send_offset_original_image_buffer[node_idx] = (num_non_overlapping_rows_per_worker)*complete_image_width * (node_idx); //- window_halfsize * complete_image_width;
 
 				top_padding_rows_send_counts[node_idx] = window_halfsize * complete_image_width; // top part should have no top padding, so send size is 0
 				top_padding_row_send_offset_original_image_buffer[node_idx] = core_row_send_offset_original_image_buffer[node_idx] - window_halfsize * complete_image_width;  //top part sould have no top padding, so we just choose the read offset of 0
@@ -450,7 +452,7 @@ int main(int argc, char* argv[])
 			MPI_BYTE,  // see above
 			0, MPI_COMM_WORLD); //distributes from the master (rank == 0) in the common world 
 
-// scatter right input image
+		// scatter right input image
 		MPI_Scatterv(right_image, core_rows_send_counts, core_row_send_offset_original_image_buffer,
 			MPI_BYTE,  // the input image is unsigned bytes [0, 255] . the disparity image needs to be sent back as signed bytes, since the disparity is signed , aka MPI_CHAR
 			&right_image_stride_for_current_worker[num_top_pixels_for_current_worker], // skip the top padding pixels in the target image and start writing from there
@@ -460,11 +462,11 @@ int main(int argc, char* argv[])
 
 
 
-///////////////////////////////////
-////// SCATTER BOTTOM PADDING ROWS. 
-///////////////////////////////////
+		///////////////////////////////////
+		////// SCATTER BOTTOM PADDING ROWS. 
+		///////////////////////////////////
 
-//Bonus-TODO: : SCATTER BOTTOM PADDING ROWS WITH SCATTERV
+		//Bonus-TODO: : SCATTER BOTTOM PADDING ROWS WITH SCATTERV
 
 
 		unsigned int total_number_of_rows_to_write_for_worker = top_padding_number_of_rows_for_current_worker + bottom_padding_number_of_rows_for_current_worker + core_number_of_rows_for_current_worker;
@@ -509,8 +511,8 @@ int main(int argc, char* argv[])
 	}
 	else { // if opencl should be used, this branch is executed for matchign rather than the reference / openmp one
 
-	 //initialize OpenCL-related variables
-	 /////////////////////////////////////
+		//initialize OpenCL-related variables
+		/////////////////////////////////////
 		cl_device_id device = NULL; // CL compute device
 		cl_context context = NULL;  // CL context storing states associated with device
 		setup_cl_environment(device, context, rank, highest_mpi_node_rank);
@@ -519,7 +521,6 @@ int main(int argc, char* argv[])
 
 		// read and create the program (see cl_helpers.h)
 		//cl_program stereo_matching_cl_program = compile_cl_kernel_with_error_log(device, context, (char*)"./cl_kernels/stereo_matching_kernels.cl"); // GPGPU program
-
 		cl_program stereo_matching_cl_program = compile_cl_kernel_with_error_log(device, context, (char*)"C:/Users/Annika/00UNI/PuvS/Projekt/WiSe_23_24_PVS_Project_Framework/cl_kernels/stereo_matching_kernels.cl"); // GPGPU program
 		// create the NCC stereo matching kernel
 		cl_kernel stereo_matching_cl_kernel = clCreateKernel(stereo_matching_cl_program, "ncc_stereo_matching", NULL); // GPGPU kernel
@@ -549,7 +550,7 @@ int main(int argc, char* argv[])
 				window_halfsize, max_disparity); // parameters for the stereo matching
 
 
-/* Read the disparity put back to host memory.*/
+			/* Read the disparity put back to host memory.*/
 			cl_int status = clEnqueueReadBuffer(command_queue, cl_disparity_image_left_to_right, CL_TRUE, 0, num_byte_per_image_part_to_match, disparity_image_chunk_left_to_right, 0, NULL, NULL);
 
 			if (CL_SUCCESS != status) {
@@ -568,7 +569,7 @@ int main(int argc, char* argv[])
 				working_dimensions,  // 2d dimensions of an image chunk -> global work group sizes
 				window_halfsize, max_disparity); // parameters for the stereo matching
 
-// Read the disparity right to left and copy it back from device to host memory.
+			// Read the disparity right to left and copy it back from device to host memory.
 			cl_int status = clEnqueueReadBuffer(command_queue, cl_disparity_image_right_to_left, CL_TRUE, 0, num_byte_per_image_part_to_match, disparity_image_chunk_right_to_left, 0, NULL, NULL);
 
 			if (CL_SUCCESS != status) {

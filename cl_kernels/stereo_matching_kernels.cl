@@ -17,8 +17,19 @@ kernel void ncc_stereo_matching(global const unsigned char* in_image_left, globa
     int e_limit_left_hand_side = window_half_size; //external limit
     int e_limit_right_hand_side = window_half_size;			//whyy warum nicht x + max_disp ?
     if (x > max_disp) {
-        e_limit_left_hand_side = std::max(window_half_size, (x - max_disp));  //left border clamped
-        e_limit_right_hand_side = std::min((image_width - 1) - window_half_size, x + max_disp); //right border clamped
+		if(window_half_size < (x - max_disp) ){
+			e_limit_left_hand_side = (x - max_disp);
+		}
+		else{
+			e_limit_left_hand_side = window_half_size;
+		}
+
+		if(((image_width - 1) - window_half_size) < (x + max_disp)){
+			 e_limit_right_hand_side = ((image_width - 1) - window_half_size);
+		}
+		else{
+			 e_limit_right_hand_side = (x + max_disp);
+		}
     }
 
 	for (int e = e_limit_left_hand_side; e <= e_limit_right_hand_side; ++e) {
