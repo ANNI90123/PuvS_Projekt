@@ -37,12 +37,116 @@ void write_grayscale_bmp_image(uint8_t* image_buffer, char* file_name, int image
 
 // this code needs to be ported to the stereo matching kernel in the cl-file - what is a straight-forward way to do it? can it be improved?
 void compute_disp_map_ref_and_omp(unsigned char* left_image, unsigned char* right_image, char* result_image,
-	image_dims const& dims, int window_half_size, int const max_disp) {
+		image_dims const& dims, int window_half_size, int const max_disp) {
 
-	//TODO: Parallelize Stereo Matching with OpenMP
-#pragma omp parallel for collapse(2)
-	for (int y = window_half_size; y < dims.height - window_half_size; ++y) {
+	omp_set_nested(1);
+
+	int y_abschnitt = floor((dims.height - (window_half_size * 2)) / 10);
+
+	for (int z = 0; z < 9; z++) {
+
+		//y = window_half_size + z * y_abschnitt;
+
+		//TODO: Parallelize Stereo Matching with OpenMP
+#pragma omp parallel for schedule(dynamic) 
+		for (int y = window_half_size + z * y_abschnitt; y < window_half_size + (z+1) * y_abschnitt; ++y) {
+			//#pragma omp parallel for schedule(dynamic) 
+			for (int x = window_half_size; x < dims.width - window_half_size; ++x) {
+
+				//float start_one_pixel = omp_get_wtime();
+
+				float best_NCC_cost = -1.0; //initallize the matching cost 
+				int best_disparity_hypothesis = 0;
+
+
+				/* - search along the horizontal scanline y of the right image
+				 *        for the pixel with intesity value matching best to the
+				 *        intensity value of out current pixel at position x
+				 * - used the following cost function to determing which should be the best match:
+				 *         normalized cross-corealtion, i.e. NCC
+				 */
+
+				int e_limit_left_hand_side = window_half_size; //external limit
+				int e_limit_right_hand_side = window_half_size;			//whyy warum nicht x + max_disp ?
+
+				if (x > max_disp) {
+					e_limit_left_hand_side = std::max(window_half_size, (x - max_disp));  //left border clamped
+					e_limit_right_hand_side = std::min((dims.width - 1) - window_half_size, x + max_disp); //right border clamped
+				}
+				//std::cout << "Go to: " << e_limit_right_hand_side << std::endl;
+				for (int e = e_limit_left_hand_side; e <= e_limit_right_hand_side; ++e) {
+					float current_NCC_cost = 0;
+					float ref_window_sum = 0;
+					float search_window_sum = 0;
+					int counter_value = 0;
+					float variance_ab = 0;
+					float variance_a = 0;
+					float variance_b = 0;
+
+					// evaluate NCC cost between ref and search windows
+					for (int win_y = -window_half_size; win_y <= window_half_size; ++win_y) {
+						for (int win_x = -window_half_size; win_x <= window_half_size; ++win_x) {
+							int search_index = ((y + win_y) * dims.width + e + win_x);
+							int reference_index = ((y + win_y) * dims.width + x + win_x);
+							ref_window_sum += left_image[reference_index];
+							search_window_sum += right_image[search_index];
+
+							variance_ab += left_image[reference_index] * right_image[search_index];
+							variance_a += left_image[reference_index] * left_image[reference_index];
+							variance_b += right_image[search_index] * right_image[search_index];
+
+							++counter_value;
+						}
+					}
+
+					float ref_window_mean = ref_window_sum / counter_value;
+					float search_window_mean = search_window_sum / counter_value;
+					variance_ab /= counter_value;
+					variance_a /= counter_value;
+					variance_b /= counter_value;
+
+					//NCC
+					current_NCC_cost = (variance_ab - ref_window_mean * search_window_mean)
+						/ sqrt((variance_a - ref_window_mean * ref_window_mean) * (variance_b - search_window_mean * search_window_mean));
+
+					// lower costs usually mean better match
+					if (current_NCC_cost > best_NCC_cost) {
+						best_NCC_cost = current_NCC_cost;
+						/* - compute the current best disparity value
+						 *      based on the postion of the current reference pixel from the left image
+						 *      and the postion of the currently best matching serach pixel from the right image
+						 */
+						best_disparity_hypothesis = (x - e);
+						//std::cout<< current_NCC_cost << '\n'; 
+
+					}
+				}
+
+
+				int pixel_offset = (y * dims.width + x);
+				result_image[pixel_offset] = best_disparity_hypothesis; //write resulting output values
+
+				if (x % 1000 == 0 && y % 100 == 0) {
+					printf("Thread: %i , x: %i, y: %i\n", omp_get_thread_num(), x, y);
+				}
+
+				//float end_one_pixel = omp_get_wtime();
+				//printf("%f sec wurden für einen Pixel benötigt", (end_one_pixel - start_one_pixel));
+
+			}
+		}
+
+		printf("Abschnitt %i done\n", z);
+
+	}
+
+
+#pragma omp parallel for schedule(dynamic)
+	for (int y = window_half_size + 9 * y_abschnitt; y <dims.height - window_half_size; ++y) {
 		for (int x = window_half_size; x < dims.width - window_half_size; ++x) {
+
+			//float start_one_pixel = omp_get_wtime();
+
 			float best_NCC_cost = -1.0; //initallize the matching cost 
 			int best_disparity_hypothesis = 0;
 
@@ -110,11 +214,20 @@ void compute_disp_map_ref_and_omp(unsigned char* left_image, unsigned char* righ
 				}
 			}
 
+
 			int pixel_offset = (y * dims.width + x);
 			result_image[pixel_offset] = best_disparity_hypothesis; //write resulting output values
+
+			if (x % 1000 == 0 && y % 100 == 0) {
+				printf("Thread: %i , x: %i, y: %i\n", omp_get_thread_num(), x, y);
+			}
+
+			printf("Abschnitt 10 done\n");
 		}
 	}
+	
 
+	printf("compute_disp_map_ref_and_omp fertig\n");
 }
 
 // function which compares the consistency of the results of the left and the right disparity maps
@@ -204,6 +317,8 @@ void setup_cl_environment(cl_device_id& device, cl_context& context, int worker_
 
 int main(int argc, char* argv[])
 {
+
+	float start = omp_get_wtime();
 
 	/* example command lines:
 		mpirun -n 1 ./StereoMatcher ./images/rect1.png ./images/rect2.png 0 0        //"no openmp/single threaded openmp", no GPGPU via openCL, 1 MPI worker (default implementation, should work for you without writing anything)
@@ -498,7 +613,9 @@ int main(int argc, char* argv[])
 	char* disparity_image_chunk_right_to_left = (char*)malloc(num_byte_per_image_part_to_match);
 
 
-	//reference implementation & openMP branch
+	float timestamp01 = omp_get_wtime();
+
+	//reference implementation & openMP branchs
 	if (!use_opencl) {
 		compute_disp_map_ref_and_omp(working_cpu_buffer_image_source_left, working_cpu_buffer_image_source_right,
 			disparity_image_chunk_left_to_right,
@@ -521,7 +638,7 @@ int main(int argc, char* argv[])
 
 		// read and create the program (see cl_helpers.h)
 		//cl_program stereo_matching_cl_program = compile_cl_kernel_with_error_log(device, context, (char*)"./cl_kernels/stereo_matching_kernels.cl"); // GPGPU program
-		cl_program stereo_matching_cl_program = compile_cl_kernel_with_error_log(device, context, (char*)"C:/Users/Annika/00UNI/PuvS/Projekt/WiSe_23_24_PVS_Project_Framework/cl_kernels/stereo_matching_kernels.cl"); // GPGPU program
+		cl_program stereo_matching_cl_program = compile_cl_kernel_with_error_log(device, context, (char*)"C:/Users/Annika/00UNI/PuvS/Projekt/PuvS_Projekt/cl_kernels/stereo_matching_kernels.cl"); // GPGPU program
 		// create the NCC stereo matching kernel
 		cl_kernel stereo_matching_cl_kernel = clCreateKernel(stereo_matching_cl_program, "ncc_stereo_matching", NULL); // GPGPU kernel
 
@@ -580,6 +697,8 @@ int main(int argc, char* argv[])
 
 	}
 
+
+	float timestamp02 = omp_get_wtime();
 
 
 	// TODO: GATHER NON-OVERLAPPING DISPARITY IMAGE PARTS IF MPI IS USED
@@ -688,6 +807,12 @@ int main(int argc, char* argv[])
 
 
 	MPI_Finalize();
+
+
+	float end = omp_get_wtime();
+
+	printf("%f sec wurden für die main benötigt\n", (timestamp01- start) + (end - timestamp02));
+	printf("%f sec wurden insgesamt benötigt\n", (end - start));
 
 
 	return 0;
